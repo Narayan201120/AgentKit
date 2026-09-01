@@ -159,4 +159,4 @@ We welcome contributions! Open an issue or PR labeled `agentkit-challenge`. Ensu
 
 ## License
 
-MIT — see [LICENSE](../../../LICENSE).
+MIT — see [LICENSE](../../LICENSE).

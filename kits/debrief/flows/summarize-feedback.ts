@@ -28,7 +28,7 @@
  * | `gaps` | `string[]` | Gaps or concerns |
  * | `action_items` | `string[]` | Concrete next steps |
  *
- * Response is returned as top-level fields mapped from the LLM node output after parsing.
+ * Response is returned as `result` JSON string nested under `result` (i.e. `{"result": "{\"summary\":...}"}`) mapped from `{{LLMNode_1.output.generatedResponse}}`; consumers parse `result` to access structured fields.
  *
  * ## Dependencies
  * - Lamatic runtime (API Request / Response)

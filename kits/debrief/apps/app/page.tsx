@@ -116,6 +116,7 @@ export default function DebriefPage() {
                             variant="ghost"
                             size="sm"
                             onClick={() => removeRound(idx)}
+                            disabled={isLoading}
                             className="h-7 text-muted-foreground"
                             aria-label={`Remove round ${idx + 1}`}
                           >
@@ -225,7 +226,7 @@ export default function DebriefPage() {
                       <p className="text-sm text-muted-foreground italic">No strengths evidenced.</p>
                     ) : (
                       <ul className="list-disc space-y-1 pl-5 text-sm">
-                        {result.strengths.map((s, i) => (
+                        {result.strengths.map((s: string, i: number) => (
                           <li key={i}>{s}</li>
                         ))}
                       </ul>
@@ -241,7 +242,7 @@ export default function DebriefPage() {
                       <p className="text-sm text-muted-foreground italic">No gaps flagged.</p>
                     ) : (
                       <ul className="list-disc space-y-1 pl-5 text-sm">
-                        {result.gaps.map((g, i) => (
+                        {result.gaps.map((g: string, i: number) => (
                           <li key={i}>{g}</li>
                         ))}
                       </ul>
@@ -257,7 +258,7 @@ export default function DebriefPage() {
                       <p className="text-sm text-muted-foreground italic">No actions suggested.</p>
                     ) : (
                       <ul className="list-disc space-y-1 pl-5 text-sm">
-                        {result.action_items.map((a, i) => (
+                        {result.action_items.map((a: string, i: number) => (
                           <li key={i}>{a}</li>
                         ))}
                       </ul>

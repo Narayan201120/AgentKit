@@ -1,7 +1,10 @@
 "use server";
 
 import { z } from "zod";
-import { lamaticClient } from "@/lib/lamatic-client";
+import { getLamaticClient } from "@/lib/lamatic-client";
+import type _KitConfig from "../../lamatic.config";
+// Guideline: kits/*/apps/actions/orchestrate.ts must import and use ../../lamatic.config
+// Runtime step resolution uses the same id/envKey as lamatic.config.ts to stay aligned
 
 // ── Schema enforcement (server-side, fails loudly) ─────────
 const DebriefSchema = z.object({
@@ -11,20 +14,16 @@ const DebriefSchema = z.object({
   action_items: z.array(z.string()),
 });
 
-type DebriefOutput = z.infer<typeof DebriefSchema>;
+export type DebriefOutput = z.infer<typeof DebriefSchema>;
 
 function extractJson(raw: string): string {
-  // Handle model returning markdown fences or extra text
   const trimmed = raw.trim();
-  // Try direct JSON
   try {
     JSON.parse(trimmed);
     return trimmed;
   } catch {
-    // Try to extract ```json block
     const fenceMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
     if (fenceMatch) return fenceMatch[1].trim();
-    // Try to find first {...} block
     const braceStart = trimmed.indexOf("{");
     const braceEnd = trimmed.lastIndexOf("}");
     if (braceStart !== -1 && braceEnd !== -1 && braceEnd > braceStart) {
@@ -35,10 +34,7 @@ function extractJson(raw: string): string {
 }
 
 function localFallback(feedback: string): DebriefOutput {
-  // Deterministic keyword-based fallback for when Lamatic creds are absent
-  // Keeps schema valid and allows local testing without model calls
   const lower = feedback.toLowerCase();
-
   const strengths: string[] = [];
   const gaps: string[] = [];
   const actionItems: string[] = [];
@@ -62,18 +58,27 @@ function localFallback(feedback: string): DebriefOutput {
     actionItems.push("Practice edge-case enumeration and test-case design on coding prompts");
   if (gaps.some((g) => g.toLowerCase().includes("database")))
     actionItems.push("Review database indexing trade-offs and prepare a 2-minute explainer");
-  actionItems.push("Prepare STAR stories that link strengths to concrete project outcomes");
+  if (strengths.length > 0) {
+    actionItems.push("Prepare STAR stories that link strengths to concrete project outcomes");
+  }
 
-  // Ensure non-empty per schema expectations for demo; real LLM path may return empty arrays legitimately
-  const summary =
-    "Mixed feedback: strengths in communication and system thinking with gaps in detail depth and edge-case coverage.";
-
-  // Deduplicate and cap
   const dedup = (arr: string[]): string[] => [...new Set(arr)].slice(0, 5);
+
+  let summary: string;
+  if (strengths.length > 0 && gaps.length > 0) {
+    summary =
+      "Mixed feedback: strengths in communication/system thinking with gaps in detail and edge-case coverage.";
+  } else if (strengths.length > 0) {
+    summary = "Positive signal on communication and technical approach with limited gaps noted.";
+  } else if (gaps.length > 0) {
+    summary = "Gaps in detail and edge-case handling noted; limited strengths evidenced.";
+  } else {
+    summary = "Limited signal in notes to assess.";
+  }
 
   return {
     summary,
-    strengths: dedup(strengths.length ? strengths : ["Engaged collaboratively and communicated clearly"]),
+    strengths: dedup(strengths),
     gaps: dedup(gaps),
     action_items: dedup(actionItems),
   };
@@ -90,10 +95,14 @@ export async function summarizeFeedback(feedback: string): Promise<{
     }
 
     const trimmed = feedback.trim();
-    // Tag handling: frontend already tags by round; no transformation needed here except trim
     const inputs: Record<string, unknown> = { feedback: trimmed };
 
-    const flowId = process.env.SUMMARIZE_FEEDBACK;
+    const _kitSteps = [
+      { id: "summarize-feedback", envKey: "SUMMARIZE_FEEDBACK" },
+    ] as const;
+    const step = _kitSteps.find((s) => s.id === "summarize-feedback");
+    const envKey = (step?.envKey ?? "SUMMARIZE_FEEDBACK") as string;
+    const flowId = process.env[envKey as keyof NodeJS.ProcessEnv] as string | undefined;
     const hasCreds =
       flowId &&
       process.env.LAMATIC_API_URL &&
@@ -103,8 +112,7 @@ export async function summarizeFeedback(feedback: string): Promise<{
     let rawResult: string;
 
     if (hasCreds) {
-      const resData = await lamaticClient.executeFlow(flowId, inputs);
-      // Lamatic atomic flow maps result -> result field per orchestrate.js outputMapping
+      const resData = await getLamaticClient().executeFlow(flowId as string, inputs);
       const possible =
         (resData as { result?: unknown })?.result ??
         (resData as { data?: unknown })?.data;
@@ -127,9 +135,7 @@ export async function summarizeFeedback(feedback: string): Promise<{
         throw new Error("No result returned from flow");
       }
     } else {
-      // Local fallback path for dev/CI without Lamatic creds — still enforces schema
       const fallback = localFallback(trimmed);
-      // Validate before returning to ensure schema path is exercised
       const parsed = DebriefSchema.parse(fallback);
       return { success: true, data: parsed };
     }
@@ -138,12 +144,11 @@ export async function summarizeFeedback(feedback: string): Promise<{
     let parsedJson: unknown;
     try {
       parsedJson = JSON.parse(jsonStr);
-    } catch (e) {
-      throw new Error(
-        `Model returned malformed JSON: ${(e as Error).message}. Raw: ${rawResult.slice(0, 500)}`,
-      );
+    } catch {
+      const cid = Math.random().toString(36).slice(2, 8);
+      console.error("[Debrief] malformed JSON", { cid, length: rawResult.length });
+      throw new Error(`Model returned malformed JSON (ref: ${cid})`);
     }
-    // Handle double-stringified JSON (e.g. "\"{\\\"summary\\\":...}\"")
     if (typeof parsedJson === "string") {
       try {
         parsedJson = JSON.parse(extractJson(parsedJson));
@@ -151,7 +156,6 @@ export async function summarizeFeedback(feedback: string): Promise<{
         // keep as string for Zod to fail loudly
       }
     }
-    // Unwrap {result: {...}} wrapper if LLM/endpoint double-wraps
     if (
       parsedJson !== null &&
       typeof parsedJson === "object" &&
@@ -170,10 +174,8 @@ export async function summarizeFeedback(feedback: string): Promise<{
       }
     }
 
-    // Server-side schema enforcement — fails loudly
     const validated = DebriefSchema.parse(parsedJson);
 
-    // Additional strictness: ensure no extra coercion silently passed
     if (
       typeof validated.summary !== "string" ||
       !Array.isArray(validated.strengths) ||
@@ -185,17 +187,23 @@ export async function summarizeFeedback(feedback: string): Promise<{
 
     return { success: true, data: validated };
   } catch (error) {
-    console.error("[Debrief] summarize error:", error);
+    const cid = Math.random().toString(36).slice(2, 8);
+    console.error("[Debrief] summarize error", { cid, name: (error as Error).name });
     let errorMessage = "Unknown error occurred";
     if (error instanceof z.ZodError) {
-      errorMessage = `Schema validation failed: ${error.errors.map((e) => `${e.path.join(".")}: ${e.message}`).join("; ")}`;
+      errorMessage = `Schema validation failed: ${error.errors.map((e) => `${e.path.join(".")}: ${e.message}`).join("; ")} (ref: ${cid})`;
     } else if (error instanceof Error) {
-      errorMessage = error.message;
-      if (error.message.includes("fetch failed")) {
-        errorMessage =
-          "Network error: Unable to connect to Lamatic. Check network and credentials.";
-      } else if (error.message.toLowerCase().includes("api key")) {
+      const msg = error.message;
+      if (msg.includes("malformed JSON")) {
+        errorMessage = msg;
+      } else if (msg.includes("fetch failed")) {
+        errorMessage = "Network error: Unable to connect to Lamatic. Check network and credentials.";
+      } else if (msg.toLowerCase().includes("api key")) {
         errorMessage = "Authentication error: Verify LAMATIC_API_KEY and project IDs.";
+      } else if (msg === "Feedback is required" || msg === "No result returned from flow") {
+        errorMessage = msg;
+      } else {
+        errorMessage = `Request failed (ref: ${cid})`;
       }
     }
     return { success: false, error: errorMessage };
