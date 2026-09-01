@@ -3,6 +3,7 @@
 import { z } from "zod";
 import { headers } from "next/headers";
 import { getLamaticClient, hasValidConfig } from "@/lib/lamatic-client";
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 import type _KitConfig from "../../lamatic.config";
 // Guideline: kits/*/apps/actions/orchestrate.ts must import and use ../../lamatic.config
 // Runtime step resolution uses the same id/envKey as lamatic.config.ts to stay aligned
