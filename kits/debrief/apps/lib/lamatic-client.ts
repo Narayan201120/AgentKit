@@ -17,13 +17,17 @@ function getValidatedEndpoint(): string {
   }
 }
 
-function hasValidConfig(): boolean {
+export function hasValidConfig(): boolean {
   return Boolean(
     getValidatedEndpoint() &&
       config.api.projectId &&
       config.api.apiKey &&
       process.env.SUMMARIZE_FEEDBACK
   );
+}
+
+export function isLamaticConfigured(): boolean {
+  return hasValidConfig();
 }
 
 if (!hasValidConfig()) {

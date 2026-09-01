@@ -1,10 +1,26 @@
 "use server";
 
 import { z } from "zod";
-import { getLamaticClient } from "@/lib/lamatic-client";
+import { headers } from "next/headers";
+import { getLamaticClient, hasValidConfig } from "@/lib/lamatic-client";
 import type _KitConfig from "../../lamatic.config";
 // Guideline: kits/*/apps/actions/orchestrate.ts must import and use ../../lamatic.config
 // Runtime step resolution uses the same id/envKey as lamatic.config.ts to stay aligned
+
+const MAX_FEEDBACK_CHARS = 15000;
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX = 10;
+const rateLimitStore = new Map<string, number[]>();
+
+function checkRateLimit(key: string): boolean {
+  const now = Date.now();
+  const timestamps = rateLimitStore.get(key) ?? [];
+  const valid = timestamps.filter((t) => now - t < RATE_LIMIT_WINDOW_MS);
+  if (valid.length >= RATE_LIMIT_MAX) return false;
+  valid.push(now);
+  rateLimitStore.set(key, valid);
+  return true;
+}
 
 // ── Schema enforcement (server-side, fails loudly) ─────────
 const DebriefSchema = z.object({
@@ -95,6 +111,18 @@ export async function summarizeFeedback(feedback: string): Promise<{
     }
 
     const trimmed = feedback.trim();
+    if (trimmed.length > MAX_FEEDBACK_CHARS) {
+      throw new Error(`Feedback too large: max ${MAX_FEEDBACK_CHARS} characters (got ${trimmed.length})`);
+    }
+    let clientKey = "global";
+    try {
+      const h = await headers();
+      const forwarded = (h.get("x-forwarded-for") || h.get("x-real-ip") || "").split(",")[0]?.trim();
+      if (forwarded) clientKey = forwarded;
+    } catch {}
+    if (!checkRateLimit(clientKey)) {
+      throw new Error("Rate limit exceeded: too many requests, please try again shortly.");
+    }
     const inputs: Record<string, unknown> = { feedback: trimmed };
 
     const _kitSteps = [
@@ -103,11 +131,7 @@ export async function summarizeFeedback(feedback: string): Promise<{
     const step = _kitSteps.find((s) => s.id === "summarize-feedback");
     const envKey = (step?.envKey ?? "SUMMARIZE_FEEDBACK") as string;
     const flowId = process.env[envKey as keyof NodeJS.ProcessEnv] as string | undefined;
-    const hasCreds =
-      flowId &&
-      process.env.LAMATIC_API_URL &&
-      process.env.LAMATIC_PROJECT_ID &&
-      process.env.LAMATIC_API_KEY;
+    const hasCreds = Boolean(flowId && hasValidConfig());
 
     let rawResult: string;
 
@@ -200,7 +224,12 @@ export async function summarizeFeedback(feedback: string): Promise<{
         errorMessage = "Network error: Unable to connect to Lamatic. Check network and credentials.";
       } else if (msg.toLowerCase().includes("api key")) {
         errorMessage = "Authentication error: Verify LAMATIC_API_KEY and project IDs.";
-      } else if (msg === "Feedback is required" || msg === "No result returned from flow") {
+      } else if (
+        msg === "Feedback is required" ||
+        msg === "No result returned from flow" ||
+        msg.startsWith("Feedback too large") ||
+        msg.startsWith("Rate limit exceeded")
+      ) {
         errorMessage = msg;
       } else {
         errorMessage = `Request failed (ref: ${cid})`;
