@@ -4,14 +4,14 @@ import { z } from "zod";
 import { lamaticClient } from "@/lib/lamatic-client";
 
 // ── Schema enforcement (server-side, fails loudly) ─────────
-export const DebriefSchema = z.object({
+const DebriefSchema = z.object({
   summary: z.string().min(1, "summary must be non-empty"),
   strengths: z.array(z.string()),
   gaps: z.array(z.string()),
   action_items: z.array(z.string()),
 });
 
-export type DebriefOutput = z.infer<typeof DebriefSchema>;
+type DebriefOutput = z.infer<typeof DebriefSchema>;
 
 function extractJson(raw: string): string {
   // Handle model returning markdown fences or extra text
