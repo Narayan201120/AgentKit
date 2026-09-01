@@ -111,16 +111,18 @@ export async function summarizeFeedback(feedback: string): Promise<{
 
       if (typeof possible === "string") {
         rawResult = possible;
-      } else if (
-        possible !== null &&
-        typeof possible === "object" &&
-        "result" in (possible as Record<string, unknown>)
-      ) {
-        const inner = (possible as Record<string, unknown>)["result"];
-        if (typeof inner === "string") rawResult = inner;
-        else rawResult = JSON.stringify(possible);
       } else if (possible !== null && typeof possible === "object") {
-        rawResult = JSON.stringify(possible);
+        const obj = possible as Record<string, unknown>;
+        if ("result" in obj) {
+          const inner = obj["result"];
+          if (typeof inner === "string") rawResult = inner;
+          else if (inner !== null && typeof inner === "object") rawResult = JSON.stringify(inner);
+          else rawResult = JSON.stringify(obj);
+        } else if ("summary" in obj) {
+          rawResult = JSON.stringify(obj);
+        } else {
+          rawResult = JSON.stringify(obj);
+        }
       } else {
         throw new Error("No result returned from flow");
       }
@@ -140,6 +142,32 @@ export async function summarizeFeedback(feedback: string): Promise<{
       throw new Error(
         `Model returned malformed JSON: ${(e as Error).message}. Raw: ${rawResult.slice(0, 500)}`,
       );
+    }
+    // Handle double-stringified JSON (e.g. "\"{\\\"summary\\\":...}\"")
+    if (typeof parsedJson === "string") {
+      try {
+        parsedJson = JSON.parse(extractJson(parsedJson));
+      } catch {
+        // keep as string for Zod to fail loudly
+      }
+    }
+    // Unwrap {result: {...}} wrapper if LLM/endpoint double-wraps
+    if (
+      parsedJson !== null &&
+      typeof parsedJson === "object" &&
+      "result" in (parsedJson as Record<string, unknown>) &&
+      !("summary" in (parsedJson as Record<string, unknown>))
+    ) {
+      const inner = (parsedJson as Record<string, unknown>)["result"];
+      if (typeof inner === "string") {
+        try {
+          parsedJson = JSON.parse(extractJson(inner));
+        } catch {
+          parsedJson = inner;
+        }
+      } else {
+        parsedJson = inner;
+      }
     }
 
     // Server-side schema enforcement — fails loudly
